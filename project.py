@@ -81,7 +81,3 @@ print(f"📉 Mean Reprojection Error: {error:.4f} pixels")
 out_npz = f"data/frames/{frame_name}_pose_frame{frame_index}.npz"
 np.savez(out_npz, rvec=rvec, tvec=tvec, error=error)
 print(f"📦 Saved pose vectors: {out_npz}")
-
-
-python baseline_solvePnP.py
-
