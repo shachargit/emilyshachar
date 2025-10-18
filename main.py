@@ -1,10 +1,11 @@
+import os
+import cv2
 import numpy as np
 import pandas as pd
-import cv2
-import os
 import glob
+import gdown
 
-# Load calibration results
+# ====================== CAMERA CALIBRATION ======================
 camera_matrix = np.array([
     [3.38821744e+03, 0.00000000e+00, 9.01478839e+02],
     [0.00000000e+00, 3.35612041e+03, 5.95209942e+02],
@@ -13,51 +14,49 @@ camera_matrix = np.array([
 
 dist_coeffs = np.array([1.37363472, -68.4275187, 0.0146233947, 0.0668579741, 1366.46007], dtype=np.float32)
 
-
-# Extract 10 evenly spaced frames from a video 
-def extract_frames(video_name, num_frames=10, target_w=1280):
-    video_path = f"data/videos/{video_name}.mov"
-    output_dir = f"data/frames/{video_name}"
+# ====================== STEP 1: DOWNLOAD VIDEO FROM GOOGLE DRIVE ======================
+def download_video_from_drive(file_id, output_dir="data/videos"):
     os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{file_id}.mov")
+    if os.path.exists(output_path):
+        print(f"Video already exists: {output_path}")
+        return output_path
+    url = f"https://drive.google.com/uc?id={file_id}"
+    print(f"Downloading video from Drive: {file_id} ...")
+    gdown.download(url, output_path, quiet=False)
+    print(f"Saved to {output_path}")
+    return output_path
+
+# ====================== STEP 2: EXTRACT FRAMES ======================
+def extract_frames(video_path, subject_id, output_dir="data/frames", total_frames=10):
+    subject_dir = os.path.join(output_dir, str(subject_id))
+    os.makedirs(subject_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {video_path}")
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_indices = np.linspace(0, total_frames - 1, num=num_frames, dtype=int)
-
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    step = max(1, frame_count // total_frames)
     saved = 0
-    for idx in frame_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+
+    for i in range(0, frame_count, step):
+        if saved >= total_frames:
+            break
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
         ok, frame = cap.read()
         if not ok:
             continue
-        h, w = frame.shape[:2]
-        if w > target_w:
-            new_h = int(h * (target_w / w))
-            frame = cv2.resize(frame, (target_w, new_h))
-        frame_name = f"{video_name}_frame_{idx:06d}.jpg"
-        cv2.imwrite(os.path.join(output_dir, frame_name), frame)
+        filename = os.path.join(subject_dir, f"{subject_id}_frame_{saved+1:03d}.jpg")
+        cv2.imwrite(filename, frame)
         saved += 1
 
     cap.release()
-    print(f"Saved {saved} evenly spaced frames for {video_name} to {output_dir}")
+    print(f"Extracted {saved} frames for subject {subject_id} to {subject_dir}")
 
-
-# Run solvePnP for a single image 
-def run_solvepnp(video_name, frame_img_path, out_dir="outputs"):
+# ====================== STEP 3: RUN SOLVEPNP ======================
+def run_solvepnp(model_3d_csv, image_2d_csv, frame_img_path, out_dir="outputs"):
     os.makedirs(out_dir, exist_ok=True)
-
-    model_3d_csv = f"data/points/{video_name}.csv"
-    pts2d_name = os.path.splitext(os.path.basename(frame_img_path))[0]
-    image_2d_csv = f"data/points/{video_name}_{pts2d_name}_2d.csv"
-
-    if not os.path.exists(model_3d_csv):
-        raise FileNotFoundError(f"3D model file not found: {model_3d_csv}")
-    if not os.path.exists(image_2d_csv):
-        raise FileNotFoundError(f"2D points file not found: {image_2d_csv}")
-
     model = pd.read_csv(model_3d_csv)
     pts2d = pd.read_csv(image_2d_csv)
     merged = pd.merge(model, pts2d, on="name", how="inner")
@@ -84,65 +83,64 @@ def run_solvepnp(video_name, frame_img_path, out_dir="outputs"):
 
     err = cv2.norm(image_points, projected, cv2.NORM_L2) / len(object_points)
     base = os.path.splitext(os.path.basename(frame_img_path))[0]
-    out_img = os.path.join(out_dir, f"{video_name}_{base}_projection.jpg")
-    out_npz = os.path.join(out_dir, f"{video_name}_{base}_pose.npz")
+    out_img = os.path.join(out_dir, f"{base}_projection.jpg")
+    out_npz = os.path.join(out_dir, f"{base}_pose.npz")
 
     cv2.imwrite(out_img, vis)
     np.savez(out_npz, rvec=rvec, tvec=tvec, error=float(err))
 
-    print(f"Pose estimation succeeded for {video_name} | {base}")
+    print(f"Pose estimation succeeded for {base}")
     print(f"Mean Reprojection Error: {err:.4f} pixels")
     return err
 
-
-# Main interface
+# ====================== STEP 4: MAIN MENU ======================
 def main():
-    video_name = input("Enter video base name (e.g., 15normal1): ").strip()
-
-    print("\nSelect mode:")
-    print("1) Extract 10 frames from video")
+    print("\n=== MAIN MENU ===")
+    print("1) Download videos from Google Drive and extract frames")
     print("2) Run solvePnP on a single image")
-    print("3) Run solvePnP on all frames for this video")
+    print("3) Run solvePnP on all images in a folder")
     mode = input("Enter 1, 2, or 3: ").strip()
 
     if mode == "1":
-        extract_frames(video_name)
+        n = int(input("How many videos to process? "))
+        for _ in range(n):
+            drive_link = input("Paste Google Drive link or ID: ").strip()
+            subject_id = input("Enter subject number (e.g., 15): ").strip()
+            file_id = drive_link.split('/')[-2] if 'drive.google.com' in drive_link else drive_link
+            video_path = download_video_from_drive(file_id)
+            extract_frames(video_path, subject_id)
+            os.remove(video_path)
+            print(f"Deleted video file {video_path} after frame extraction.\n")
 
     elif mode == "2":
+        model_3d_csv = "data/points/model_3d.csv"
         frame_img_path = input("Enter image path (jpg/png): ").strip()
-        run_solvepnp(video_name, frame_img_path)
+        points_2d_csv = input("Enter 2D points file (name,x,y): ").strip()
+        run_solvepnp(model_3d_csv, points_2d_csv, frame_img_path)
 
     elif mode == "3":
-        frames_folder = f"data/frames/{video_name}"
+        model_3d_csv = "data/points/model_3d.csv"
+        points_2d_csv = input("Enter 2D points file (name,x,y): ").strip()
+        frames_folder = "data/frames"
         image_paths = sorted(glob.glob(os.path.join(frames_folder, "*.jpg")))
-
         if not image_paths:
-            print(f"No images found in {frames_folder}")
+            print("No images found in data/frames")
             return
-
-        print(f"Found {len(image_paths)} frames. Running solvePnP on all...\n")
+        print(f"Found {len(image_paths)} images. Running solvePnP on all...\n")
         errors = []
         for img_path in image_paths:
             try:
-                err = run_solvepnp(video_name, img_path)
+                err = run_solvepnp(model_3d_csv, points_2d_csv, img_path)
                 errors.append(err)
             except Exception as e:
                 print("Error processing", img_path, ":", e)
-
         if errors:
-            avg_err = np.mean(errors)
-            print(f"\nAverage Reprojection Error: {avg_err:.4f} pixels")
-            pd.DataFrame({"frame": image_paths, "error": errors}).to_csv(
-                f"outputs/{video_name}_summary.csv", index=False
-            )
-            print(f"Results saved to outputs/{video_name}_summary.csv")
+            print("\nAverage Reprojection Error:", np.mean(errors))
         else:
             print("\nNo valid results produced.")
-
     else:
-        print("Invalid mode selected.")
+        print("Invalid option selected.")
 
 
 if __name__ == "__main__":
     main()
-
