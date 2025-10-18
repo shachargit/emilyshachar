@@ -3,6 +3,22 @@ import pandas as pd
 import cv2
 import os
 import glob
+import subprocess
+
+# ====== Step 0: Auto-convert MOV to MP4 if needed ======
+def ensure_mp4(video_path):
+    if video_path.lower().endswith(".mov"):
+        mp4_path = video_path.rsplit(".", 1)[0] + ".mp4"
+        if not os.path.exists(mp4_path):
+            print(f"Converting {video_path} to MP4...")
+            subprocess.run([
+                "ffmpeg", "-i", video_path,
+                "-vcodec", "libx264", "-acodec", "aac",
+                mp4_path, "-y"
+            ], check=True)
+        return mp4_path
+    return video_path
+
 
 # ====== Step 1: Load calibration results ======
 camera_matrix = np.array([
@@ -14,37 +30,39 @@ camera_matrix = np.array([
 dist_coeffs = np.array([1.37363472, -68.4275187, 0.0146233947, 0.0668579741, 1366.46007], dtype=np.float32)
 
 
-# ====== Step 2: Extract 10 frames from local video ======
-def extract_frames(video_path, output_dir="data/frames", total_frames=10, target_w=1280):
+# ====== Step 2: Extract frames from video ======
+def extract_frames(video_path, output_dir="data/frames", num_frames=10, target_w=1280):
+    video_path = ensure_mp4(video_path)
     os.makedirs(output_dir, exist_ok=True)
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {video_path}")
 
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    step = max(total // total_frames, 1)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    step = max(1, total_frames // num_frames)
 
-    name = os.path.splitext(os.path.basename(video_path))[0]
-    subject_id = ''.join([c for c in name if c.isdigit()])
-    subject_folder = os.path.join(output_dir, subject_id or name)
-    os.makedirs(subject_folder, exist_ok=True)
+    base_name = os.path.splitext(os.path.basename(video_path))[0]
+    subj_dir = os.path.join(output_dir, base_name)
+    os.makedirs(subj_dir, exist_ok=True)
 
     i = saved = 0
     while True:
         ok, frame = cap.read()
-        if not ok or saved >= total_frames:
+        if not ok or saved >= num_frames:
             break
         if i % step == 0:
             h, w = frame.shape[:2]
             if w > target_w:
                 new_h = int(h * (target_w / w))
                 frame = cv2.resize(frame, (target_w, new_h))
-            out_name = os.path.join(subject_folder, f"{name}_frame_{saved+1:02d}.jpg")
-            cv2.imwrite(out_name, frame)
+            frame_path = os.path.join(subj_dir, f"{base_name}_frame_{saved+1:02d}.jpg")
+            cv2.imwrite(frame_path, frame)
             saved += 1
         i += 1
+
     cap.release()
-    print(f"Saved {saved} frames to {subject_folder}")
+    print(f"Saved {saved} frames to {subj_dir}")
 
 
 # ====== Step 3: Run solvePnP for one image ======
@@ -90,15 +108,15 @@ def run_solvepnp(model_3d_csv, image_2d_csv, frame_img_path, out_dir="outputs"):
 # ====== Step 4: Main interface ======
 def main():
     print("Select mode:")
-    print("1) Extract 10 frames from local video")
+    print("1) Extract 10 frames from video")
     print("2) Run solvePnP on a single image")
-    print("3) Run solvePnP on all images in data/frames")
+    print("3) Run solvePnP on all frames for this video")
 
     mode = input("Enter 1, 2, or 3: ").strip()
 
     if mode == "1":
-        video_path = input("Enter local video path (e.g. data/videos/15normal1.mov): ").strip()
-        extract_frames(video_path)
+        video_name = input("Enter video path (e.g. data/videos/10normal1.mov): ").strip()
+        extract_frames(video_name)
 
     elif mode == "2":
         model_3d_csv = "data/points/model_3d.csv"
@@ -109,11 +127,11 @@ def main():
     elif mode == "3":
         model_3d_csv = "data/points/model_3d.csv"
         points_2d_csv = input("Enter 2D points file (name,x,y): ").strip()
-        frames_folder = "data/frames"
-        image_paths = sorted(glob.glob(os.path.join(frames_folder, "**/*.jpg"), recursive=True))
+        frames_folder = input("Enter frames folder (e.g. data/frames/10normal1): ").strip()
+        image_paths = sorted(glob.glob(os.path.join(frames_folder, "*.jpg")))
 
         if not image_paths:
-            print("No images found in data/frames")
+            print("No images found in given folder.")
             return
 
         print(f"Found {len(image_paths)} images. Running solvePnP on all...\n")
@@ -129,7 +147,6 @@ def main():
             print("\nAverage Reprojection Error:", np.mean(errors))
         else:
             print("\nNo valid results produced.")
-
     else:
         print("Invalid mode selected.")
 
