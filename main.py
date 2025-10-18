@@ -31,38 +31,31 @@ dist_coeffs = np.array([1.37363472, -68.4275187, 0.0146233947, 0.0668579741, 136
 
 
 # ====== Step 2: Extract frames from video ======
-def extract_frames(video_path, output_dir="data/frames", num_frames=10, target_w=1280):
-    video_path = ensure_mp4(video_path)
+def extract_frames(video_path, output_dir="data/frames", step=30, max_frames=10, target_w=1280):
     os.makedirs(output_dir, exist_ok=True)
-
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {video_path}")
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    step = max(1, total_frames // num_frames)
-
-    base_name = os.path.splitext(os.path.basename(video_path))[0]
-    subj_dir = os.path.join(output_dir, base_name)
-    os.makedirs(subj_dir, exist_ok=True)
-
     i = saved = 0
     while True:
         ok, frame = cap.read()
-        if not ok or saved >= num_frames:
+        if not ok or saved >= max_frames:
             break
         if i % step == 0:
             h, w = frame.shape[:2]
             if w > target_w:
                 new_h = int(h * (target_w / w))
                 frame = cv2.resize(frame, (target_w, new_h))
-            frame_path = os.path.join(subj_dir, f"{base_name}_frame_{saved+1:02d}.jpg")
-            cv2.imwrite(frame_path, frame)
+            # save each frame with the video name prefix
+            base_name = os.path.splitext(os.path.basename(video_path))[0]
+            frame_name = f"{base_name}_frame_{i:06d}.jpg"
+            cv2.imwrite(os.path.join(output_dir, frame_name), frame)
             saved += 1
         i += 1
-
     cap.release()
-    print(f"Saved {saved} frames to {subj_dir}")
+    print(f"Saved {saved} frames from {video_path} to {output_dir}")
+
 
 
 # ====== Step 3: Run solvePnP for one image ======
@@ -153,3 +146,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
