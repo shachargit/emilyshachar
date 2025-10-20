@@ -112,6 +112,7 @@ def main():
         extract_frames(video_name)
 
     elif mode == "2":
+        model_3d_csv = input("Enter 3D model file path (name,X,Y,Z): ").strip()
         model_3d_csv = "data/points/model_3d.csv"
         frame_img_path = input("Enter image path (jpg/png): ").strip()
         points_2d_csv = input("Enter 2D points file (name,x,y): ").strip()
